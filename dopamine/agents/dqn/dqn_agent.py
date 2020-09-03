@@ -213,6 +213,7 @@ class DQNAgent(object):
     # environment.
     self._observation = None
     self._last_observation = None
+    self._probability = -1
 
   def _create_network(self, name):
     """Builds the convolutional network used to compute the agent's Q-values.
@@ -402,12 +403,26 @@ class DQNAgent(object):
           self.training_steps,
           self.min_replay_history,
           self.epsilon_train)
+
+    #To log probabilities we need to always evaluate the argmax
+    argmax_action = self._sess.run(self._q_argmax, {self.state_ph: self.state})
     if random.random() <= epsilon:
       # Choose a random action with probability epsilon.
-      return random.randint(0, self.num_actions - 1)
+      selected_action =  random.randint(0, self.num_actions - 1)
     else:
       # Choose the action with highest Q-value at the current state.
-      return self._sess.run(self._q_argmax, {self.state_ph: self.state})
+      selected_action = argmax_action
+
+    if selected_action == argmax_action:
+      # Probability marginalizes over all code paths
+      self._probability = epsilon / self.num_actions + (1-epsilon)
+    else:
+      self._probability = epsilon / self.num_actions
+    #import pdb
+    #pdb.set_trace()
+    return selected_action
+
+
 
   def _train_step(self):
     """Runs a single training step.
@@ -467,7 +482,7 @@ class DQNAgent(object):
       reward: float, the reward.
       is_terminal: bool, indicating if the current state is a terminal state.
     """
-    self._replay.add(last_observation, action, reward, is_terminal)
+    self._replay.add(last_observation, action, reward, is_terminal, self._probability)
 
   def _reset_state(self):
     """Resets the agent state by filling it with zeros."""
