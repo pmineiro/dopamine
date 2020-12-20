@@ -45,7 +45,8 @@ class OutOfGraphOffPolicyReplayBuffer(circular_replay_buffer.OutOfGraphReplayBuf
                action_shape=(),
                action_dtype=np.int32,
                reward_shape=(),
-               reward_dtype=np.float32):
+               reward_dtype=np.float32,
+               subsample_percentage=None):
     """Initializes OutOfGraphOffPolicyReplayBuffer.
 
     Args:
@@ -69,6 +70,7 @@ class OutOfGraphOffPolicyReplayBuffer(circular_replay_buffer.OutOfGraphReplayBuf
       reward_shape: tuple of ints, the shape of the reward vector. Empty tuple
         means the reward is a scalar.
       reward_dtype: np.dtype, type of elements in the reward.
+      subsample_percentage: only use x% of the buffer
     """
 
     super(OutOfGraphOffPolicyReplayBuffer, self).__init__(
@@ -86,6 +88,8 @@ class OutOfGraphOffPolicyReplayBuffer(circular_replay_buffer.OutOfGraphReplayBuf
         action_dtype=action_dtype,
         reward_shape=reward_shape,
         reward_dtype=reward_dtype)
+    self._subsample_percentage = None if subsample_percentage is None else int(subsample_percentage)
+    logging.info('\t subsample percentage: %s', str(self._subsample_percentage))
 
     # wmax has not been checkpointed.
     # If we try to keep track of it here, batch_rl complains it cannot find a checkpoint
@@ -147,6 +151,53 @@ class OutOfGraphOffPolicyReplayBuffer(circular_replay_buffer.OutOfGraphReplayBuf
         ReplayElement('traj_discount', (batch_size, update_horizon), np.float32),
     ]
     return parent_transition_type + trajectory_type
+
+  def sample_index_batch(self, batch_size):
+    """Returns a batch of valid indices sampled uniformly.
+
+    Args:
+      batch_size: int, number of indices returned.
+
+    Returns:
+      list of ints, a batch of valid indices sampled uniformly.
+
+    Raises:
+      RuntimeError: If the batch was not constructed after maximum number of
+        tries.
+    """
+    if self.is_full():
+      # add_count >= self._replay_capacity > self._stack_size
+      min_id = self.cursor() - self._replay_capacity + self._stack_size - 1
+      max_id = self.cursor() - self._update_horizon
+    else:
+      # add_count < self._replay_capacity
+      min_id = self._stack_size - 1
+      max_id = self.cursor() - self._update_horizon
+      if max_id <= min_id:
+        raise RuntimeError('Cannot sample a batch with fewer than stack size '
+                           '({}) + update_horizon ({}) transitions.'.
+                           format(self._stack_size, self._update_horizon))
+
+    indices = []
+    attempt_count = 0
+    while (len(indices) < batch_size and
+           attempt_count < self._max_sample_attempts):
+      index = np.random.randint(min_id, max_id) % self._replay_capacity
+      if self._subsample_percentage is not None:
+          every = 100 // self._subsample_percentage
+          index -= index % every
+      if self.is_valid_transition(index):
+        indices.append(index)
+      else:
+        attempt_count += 1
+    if len(indices) != batch_size:
+      raise RuntimeError(
+          'Max sample attempts: Tried {} times but only sampled {}'
+          ' valid indices. Batch size is {}'.
+          format(self._max_sample_attempts, len(indices), batch_size))
+
+    return indices
+
 
   def sample_transition_batch(self, batch_size=None, indices=None):
     """Returns a batch of transitions (including any extra contents).
