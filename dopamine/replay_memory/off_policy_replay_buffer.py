@@ -90,6 +90,7 @@ class OutOfGraphOffPolicyReplayBuffer(circular_replay_buffer.OutOfGraphReplayBuf
         reward_dtype=reward_dtype)
     self._subsample_percentage = None if subsample_percentage is None else int(subsample_percentage)
     logging.info('\t subsample percentage: %s', str(self._subsample_percentage))
+    assert self._subsample_percentage is None or self._subsample_percentage > 0
 
     # wmax has not been checkpointed.
     # If we try to keep track of it here, batch_rl complains it cannot find a checkpoint
@@ -184,8 +185,10 @@ class OutOfGraphOffPolicyReplayBuffer(circular_replay_buffer.OutOfGraphReplayBuf
            attempt_count < self._max_sample_attempts):
       index = np.random.randint(min_id, max_id) % self._replay_capacity
       if self._subsample_percentage is not None:
-          every = 100 // self._subsample_percentage
-          index -= index % every
+          hashindex = index * 2654435761
+          while hashindex % 100 >= self._subsample_percentage:
+              index = np.random.randint(min_id, max_id) % self._replay_capacity
+              hashindex = index * 2654435761
       if self.is_valid_transition(index):
         indices.append(index)
       else:
