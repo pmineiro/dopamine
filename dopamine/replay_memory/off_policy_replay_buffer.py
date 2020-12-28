@@ -46,7 +46,8 @@ class OutOfGraphOffPolicyReplayBuffer(circular_replay_buffer.OutOfGraphReplayBuf
                action_dtype=np.int32,
                reward_shape=(),
                reward_dtype=np.float32,
-               subsample_percentage=None):
+               subsample_percentage=None,
+               subsample_seed=None):
     """Initializes OutOfGraphOffPolicyReplayBuffer.
 
     Args:
@@ -91,6 +92,7 @@ class OutOfGraphOffPolicyReplayBuffer(circular_replay_buffer.OutOfGraphReplayBuf
     self._subsample_percentage = None if subsample_percentage is None else int(subsample_percentage)
     logging.info('\t subsample percentage: %s', str(self._subsample_percentage))
     assert self._subsample_percentage is None or self._subsample_percentage > 0
+    self._subsample_seed = subsample_seed
 
     # wmax has not been checkpointed.
     # If we try to keep track of it here, batch_rl complains it cannot find a checkpoint
@@ -185,10 +187,19 @@ class OutOfGraphOffPolicyReplayBuffer(circular_replay_buffer.OutOfGraphReplayBuf
            attempt_count < self._max_sample_attempts):
       index = np.random.randint(min_id, max_id) % self._replay_capacity
       if self._subsample_percentage is not None:
-          hashindex = index * 2654435761
+          def hashit(v):
+             v = (((v >> 16) ^ v) * 0x119de1f3) % (1 << 31)
+             v = (((v >> 16) ^ v) * 0x119de1f3) % (1 << 31)
+             v = ((v >> 16) ^ v) % (1 << 31)
+             return v
+
+          def hashitseed(v, seed):
+             return hashit(v + hashit(seed))
+
+          hashindex = hashitseed(index, int(self._subsample_seed))
           while hashindex % 100 >= self._subsample_percentage:
               index = np.random.randint(min_id, max_id) % self._replay_capacity
-              hashindex = index * 2654435761
+              hashindex = hashitseed(index, int(self._subsample_seed))
       if self.is_valid_transition(index):
         indices.append(index)
       else:
